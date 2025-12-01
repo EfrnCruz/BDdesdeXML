@@ -252,7 +252,7 @@ def show_data_summary(df):
 
     with col2:
         # Count unique employers
-        unique_employers = df['rfc_empleador'].nunique() if not df.empty and 'rfc_empleador' in df.columns else 0
+        unique_employers = df['rfc_empleador'].nunique() if not df.empty else 0
         styled_metric(
             label="🏢 Empleadores Únicos",
             value=unique_employers,
@@ -261,19 +261,11 @@ def show_data_summary(df):
 
     with col3:
         # Count employees with complete data
-        complete_data = 0
-        if not df.empty:
-            conditions = []
-            if 'curp' in df.columns:
-                conditions.append(df['curp'].notna())
-            if 'num_seguridad_social' in df.columns:
-                conditions.append(df['num_seguridad_social'].notna())
-            if 'fecha_inicio_rel_laboral' in df.columns:
-                conditions.append(df['fecha_inicio_rel_laboral'].notna())
-
-            if conditions:
-                complete_data = df[conditions].shape[0]
-
+        complete_data = df[
+            (df['curp'].notna()) &
+            (df['num_seguridad_social'].notna()) &
+            (df['fecha_inicio_rel_laboral'].notna())
+        ].shape[0] if not df.empty else 0
         percentage = (complete_data / len(df) * 100) if len(df) > 0 else 0
         styled_metric(
             label="✅ Datos Completos",
@@ -374,90 +366,56 @@ def main():
                 })
 
             df_files = pd.DataFrame(file_details)
-            st.dataframe(df_files, width='stretch')
+            st.dataframe(df_files, use_container_width=True)
 
     with tab2:
-        # Cloud-appropriate warning and instructions
+        # Adapting for Streamlit Cloud - Local file access not available
         st.warning("""
-        ⚠️ **Limitación en Streamlit Cloud**:
+        ⚠️ **Limitación en Streamlit Cloud**
 
-        La búsqueda por ruta no está disponible en la nube. En su lugar, utiliza las siguientes opciones:
+        La búsqueda por ruta no está disponible en la nube. En su lugar, utiliza:
         """)
 
         st.markdown("""
-        ### 📂 **Opciones Recomendadas:**
+        ### 📂 **Alternativas para subir archivos:**
 
         1. **🗜️ Sube un archivo ZIP** con todos tus XMLs
-           - Comprime todos tus archivos XML en un .zip
-           - Arrastra o selecciona el ZIP en la pestaña "Subir Archivos"
+           - Comprime tus archivos XML en un .zip
+           - Máximo 200MB por archivo ZIP
+           - Usa la pestaña "Subir Archivos"
 
         2. **📄 Sube archivos XML individuales**
-           - Selecciona múltiples archivos XML a la vez
-           - Puedes subir hasta 50 archivos simultáneamente
+           - Selecciona múltiples archivos XML
+           - Arrastra y suelta los archivos
 
         3. **💡 Procesamiento por lotes**
-           - Si tienes muchos archivos, procésalos en grupos pequeños
-           - Descarga los resultados antes de procesar el siguiente lote
+           - Procesa en grupos de 50-100 archivos
+           - Descarga los resultados entre lotes
         """)
 
         st.info("""
-        **🚀 En Streamlit Community Edition (local):**
-        Esta función de búsqueda por ruta está disponible cuando ejecutas la app localmente:
-        ```bash
-        streamlit run app.py
-        ```
+        **📌 Formatos soportados:**
+        - ✅ Archivos XML individuales (.xml)
+        - ✅ Archivos ZIP con múltiples XMLs (.zip)
+        - ✅ Carga por lotes de archivos
+
+        **🚀 Para desarrollo local:**
+        Si ejecutas la aplicación localmente, esta función de búsqueda por ruta está disponible.
         """)
 
-        # For local development, still include the search functionality
-        if st.checkbox("🔧 Modo Desarrollador: Habilitar búsqueda por ruta", key="dev_mode", help="Solo funciona en ejecución local"):
-            st.write("Especifica una ruta donde buscar archivos XML o ZIP:")
-            path_input = st.text_input(
-                "Ruta del directorio:",
-                placeholder="Ej: C:/Users/Usuario/Desktop/NominaXMLs o ./XML_Ejemplos",
-                help="Ingresa la ruta completa a un directorio que contenga archivos XML o ZIP"
-            )
-
-            if path_input and st.button("🔍 Buscar Archivos", key="search_path"):
-                with st.spinner("Buscando archivos..."):
-                    try:
-                        extractor = EmployeeDatabaseExtractor()
-                        files_in_path = extractor.find_xml_files(path_input)
-
-                        if files_in_path:
-                            st.success(f"Se encontraron {len(files_in_path)} archivos:")
-                            for file in files_in_path[:10]:  # Show first 10
-                                st.write(f"- {file}")
-                            if len(files_in_path) > 10:
-                                st.write(f"... y {len(files_in_path) - 10} archivos más")
-
-                            # Store found files in session state
-                            st.session_state['files_from_path'] = files_in_path
-                        else:
-                            st.error("No se encontraron archivos XML o ZIP en la ruta especificada")
-                    except Exception as e:
-                        st.error(f"Error buscando archivos: {str(e)}")
-                        st.info("Esta función solo está disponible en ejecución local")
-
-            # Show files found from path search
-            if 'files_from_path' in st.session_state and st.session_state['files_from_path']:
-                st.info(f"Archivos encontrados: {len(st.session_state['files_from_path'])} archivos")
-                if st.checkbox("Mostrar lista de archivos", key="show_path_files"):
-                    for file in st.session_state['files_from_path']:
-                        st.write(f"- {file}")
-
-        # Add example files section for cloud
+        # Optional: Add a section explaining XML format for users
         st.markdown("---")
-        st.markdown("### 📋 **Formato de XML Soportado:**")
+        st.markdown("### 📋 **Formato de XML aceptado:**")
         st.code("""
-        Ejemplo de XML de nómina SAT:
-        - Archivos con extensión .xml
-        - Con complemento <nomina12:Nomina>
-        - Con datos de empleado: RFC, CURP, NSS
-        - Con información salarial y contractual
+Estructura básica del XML de nómina SAT:
+- Extensión: .xml
+- Con complemento <nomina12:Nomina>
+- Contiene datos del empleado: RFC, CURP, NSS
+- Información salarial y contractual
         """, language="xml")
 
     # Enhanced process button with better styling
-    has_files = bool(uploaded_files) or ('files_from_path' in st.session_state and st.session_state['files_from_path'])
+    has_files = bool(uploaded_files)
 
     # Add file status indicator with dark theme
     if has_files:
@@ -479,7 +437,7 @@ def main():
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         if st.button("🚀 Procesar Archivos", type="primary", disabled=not has_files,
-                    width='stretch', help="Inicia el procesamiento de los archivos XML"):
+                    use_container_width=True, help="Inicia el procesamiento de los archivos XML"):
             with st.spinner("⏳ Procesando archivos..."):
                 try:
                     temp_files = []
@@ -489,10 +447,6 @@ def main():
                     if uploaded_files:
                         temp_files = extract_xml_files(uploaded_files)
                         files_to_process.extend(temp_files)
-
-                    # Handle files from path
-                    if 'files_from_path' in st.session_state and st.session_state['files_from_path']:
-                        files_to_process.extend(st.session_state['files_from_path'])
 
                     if not files_to_process:
                         st.error("❌ No se encontraron archivos XML válidos")
@@ -555,9 +509,6 @@ def main():
                     default_columns.extend(['tipo_contrato', 'departamento', 'puesto', 'codigo_postal'])
                     default_columns.extend(['fecha_inicio_rel_laboral', 'antigüedad', 'salario_diario_integrado'])
 
-                    # Filter available columns
-                    default_columns = [col for col in default_columns if col in all_columns]
-
                     selected_columns = st.multiselect(
                             "Selecciona columnas para mostrar:",
                             options=all_columns,
@@ -567,11 +518,11 @@ def main():
 
                     if selected_columns:
                         display_df = employees_df[selected_columns].copy()
-                        st.dataframe(display_df, width='stretch', hide_index=True)
+                        st.dataframe(display_df, use_container_width=True, hide_index=True)
 
                     # Full data expander
                     with st.expander("📊 Ver Todos los Datos"):
-                        st.dataframe(employees_df, width='stretch', hide_index=True)
+                        st.dataframe(employees_df, use_container_width=True, hide_index=True)
 
                     # Data analysis section
                     st.subheader("📈 Análisis de Datos")
@@ -618,7 +569,7 @@ def main():
                             data=excel_data,
                             file_name=f"base_empleados_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            width='stretch'
+                            use_container_width=True
                         )
 
                     with col2:
@@ -636,25 +587,25 @@ def main():
                             data=csv_data,
                             file_name=f"base_empleados_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
                             mime="text/csv",
-                            width='stretch'
+                            use_container_width=True
                         )
 
                     # Statistics section
                     st.subheader("📊 Estadísticas Detalladas")
 
-                    # Show data quality metrics - CORREGIDO para manejar columnas que podrían no existir
+                    # Show data quality metrics
                     quality_metrics = {
                         'Total Registros': len(employees_df),
-                        'RFCs Únicos': employees_df['rfc_empleado'].nunique() if 'rfc_empleado' in employees_df.columns else 0,
-                        'CURPs Válidas': employees_df['curp'].notna().sum() if 'curp' in employees_df.columns else 0,
-                        'NSS Registrados': employees_df['num_seguridad_social'].notna().sum() if 'num_seguridad_social' in employees_df.columns else 0,
-                        'Con Salario Registrado': employees_df['salario_diario_integrado'].notna().sum() if 'salario_diario_integrado' in employees_df.columns else 0,
-                        'Con Fecha de Inicio': employees_df['fecha_inicio_rel_laboral'].notna().sum() if 'fecha_inicio_rel_laboral' in employees_df.columns else 0
+                        'RFCs Únicos': employees_df['rfc_empleado'].nunique(),
+                        'CURPs Válidas': employees_df['curp'].notna().sum(),
+                        'NSS Registrados': employees_df['num_seguridad_social'].notna().sum(),
+                        'Con Salario Registrado': employees_df['salario_diario_integrado'].notna().sum(),
+                        'Con Fecha de Inicio': employees_df['fecha_inicio_rel_laboral'].notna().sum()
                     }
 
                     metrics_df = pd.DataFrame(list(quality_metrics.items()),
                                                  columns=['Métrica', 'Cantidad'])
-                    st.dataframe(metrics_df, width='stretch', hide_index=True)
+                    st.dataframe(metrics_df, use_container_width=True, hide_index=True)
 
                 except Exception as e:
                     st.error(f"❌ Error durante el procesamiento: {str(e)}")

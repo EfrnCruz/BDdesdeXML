@@ -48,43 +48,62 @@ class CatalogManager:
                     # y encontrar donde empiezan los datos reales
                     data_start_row = 0
                     for i, row in df.iterrows():
-                        if any(str(cell).strip() in ['Clave', 'clave', 'CVE', 'cve', 'ID', 'id'] for cell in row):
-                            # Encontramos la fila de encabezados
-                            header_row = row.tolist()
-                            for j, header in enumerate(header_row):
-                                header_str = str(header).strip()
-                                if header_str in ['Clave', 'clave', 'CVE', 'cve', 'ID', 'id']:
-                                    clave_col = j
-                                elif header_str in ['Descripción', 'descripcion', 'Descrip', 'descrip', 'Nombre', 'nombre']:
-                                    desc_col = j
+                        row_values = [str(val) for val in row.values]
+                        # Buscar fila que contiene "c_Tipo" o similar
+                        if any('c_' in str(val) and 'Tipo' in str(val) for val in row_values if pd.notna(val)):
                             data_start_row = i + 1
+                            # Encontrar las columnas correctas - buscar los índices de los valores en la fila
+                            for j, val in enumerate(row_values):
+                                if 'c_' in str(val):
+                                    clave_col = columns[j]  # Esta es la columna que contiene los códigos
+                                elif 'Descripci' in str(val) or 'Descripción' in str(val):
+                                    desc_col = columns[j]    # Esta es la columna que contiene las descripciones
                             break
 
-                    # Si no encontramos columnas claras, asumir primeras dos columnas
-                    if clave_col is None and len(df.columns) >= 2:
-                        clave_col = 0
-                        desc_col = 1
+                    # Si no se encuentra el formato especial, usar el método original
+                    if clave_col is None:
+                        # Buscar columnas numéricas o que contengan 'Clave', 'c_', 'Tipo'
+                        for i, col in enumerate(columns):
+                            col_str = str(col).lower()
+                            if any(keyword in col_str for keyword in ['clave', 'c_', 'tipo', 'id']):
+                                if clave_col is None:
+                                    clave_col = col
+                                elif desc_col is None and i > 0:
+                                    desc_col = columns[i+1] if i+1 < len(columns) else columns[i-1]
+
+                        # Si no se identifican las columnas correctamente, usar las dos primeras
+                        if clave_col is None and len(columns) >= 2:
+                            clave_col = columns[0]
+                            desc_col = columns[1]
                         data_start_row = 0
 
-                    # Cargar datos reales
-                    if clave_col is not None and desc_col is not None:
-                        for i in range(data_start_row, len(df)):
+                    if clave_col and desc_col:
+                        # Convertir a diccionario, omitiendo filas de metadata
+                        for i, row in df.iterrows():
+                            if i < data_start_row:
+                                continue  # Omitir filas de metadata
                             try:
-                                row_data = df.iloc[i]
-                                clave = str(row_data.iloc[clave_col]).strip()
-                                descripcion = str(row_data.iloc[desc_col]).strip()
-
-                                # Skip empty or invalid rows
-                                if clave and clave != 'nan' and descripcion and descripcion != 'nan':
-                                    catalog_dict[clave] = descripcion
-                            except (IndexError, KeyError, ValueError):
+                                clave = str(row[clave_col]).strip()
+                                desc = str(row[desc_col]).strip()
+                                if clave != 'nan' and desc != 'nan' and clave and desc:
+                                    catalog_dict[clave] = desc
+                                    # Also add zero-padded version for common codes
+                                    if clave.isdigit() and len(clave) == 1:
+                                        catalog_dict[f"0{clave}"] = desc
+                            except:
                                 continue
 
-                    self.catalogs[sheet_name] = catalog_dict
-                    logger.info(f"Catálogo '{sheet_name}' cargado con {len(catalog_dict)} entradas")
+                        if catalog_dict:
+                            self.catalogs[sheet_name] = {
+                                'data': df,
+                                'mapping': catalog_dict,
+                                'clave_column': clave_col,
+                                'desc_column': desc_col
+                            }
+                            logger.info(f"    Cargado: {len(catalog_dict)} registros")
 
-            self.loaded = True
-            logger.info("Todos los catálogos cargados exitosamente")
+            self.loaded = len(self.catalogs) > 0
+            logger.info(f"Total de catálogos cargados: {len(self.catalogs)}")
 
         except Exception as e:
             logger.error(f"Error cargando catálogos: {e}")
@@ -92,89 +111,142 @@ class CatalogManager:
 
     def get_description(self, catalog_name: str, key: str) -> str:
         """
-        Obtiene la descripción de una clave de un catálogo específico
+        Obtiene la descripción de un catálogo basado en la clave
 
         Args:
-            catalog_name: Nombre del catálogo
+            catalog_name: Nombre del catálogo/pestaña
             key: Clave a buscar
 
         Returns:
-            Descripción correspondiente o la clave si no se encuentra
+            Descripción correspondiente o la clave si no encuentra
         """
         if not self.loaded or catalog_name not in self.catalogs:
-            return get_manual_description(catalog_name, key)
+            return str(key)
 
-        catalog = self.catalogs[catalog_name]
-        return catalog.get(str(key).strip(), get_manual_description(catalog_name, key))
+        try:
+            return self.catalogs[catalog_name]['mapping'].get(str(key), str(key))
+        except:
+            return str(key)
+
+    def decode_tipo_contrato(self, clave: str) -> str:
+        """Decodifica tipo de contrato"""
+        return self.get_description('c_TipoContrato', clave)
+
+    def decode_tipo_jornada(self, clave: str) -> str:
+        """Decodifica tipo de jornada"""
+        return self.get_description('c_TipoJornada', clave)
+
+    def decode_tipo_regimen(self, clave: str) -> str:
+        """Decodifica tipo de régimen"""
+        return self.get_description('c_TipoRegimen', clave)
+
+    def decode_periodicidad_pago(self, clave: str) -> str:
+        """Decodifica periodicidad de pago"""
+        return self.get_description('c_PeriodicidadPago', clave)
+
+    def decode_riesgo_puesto(self, clave: str) -> str:
+        """Decodifica riesgo puesto"""
+        return self.get_description('c_RiesgoPuesto', clave)
+
+    def decode_banco(self, clave: str) -> str:
+        """Decodifica banco"""
+        return self.get_description('c_Banco', clave)
+
+    def decode_tipo_percepcion(self, clave: str) -> str:
+        """Decodifica tipo de percepción"""
+        return self.get_description('c_TipoPercepcion', clave)
+
+    def decode_tipo_deduccion(self, clave: str) -> str:
+        """Decodifica tipo de deducción"""
+        return self.get_description('c_TipoDeduccion', clave)
+
+    def decode_tipo_otro_pago(self, clave: str) -> str:
+        """Decodifica otro tipo de pago"""
+        return self.get_description('c_TipoOtroPago', clave)
+
+    def get_catalog_info(self) -> Dict[str, Any]:
+        """Retorna información sobre los catálogos cargados"""
+        info = {}
+        for name, catalog in self.catalogs.items():
+            info[name] = {
+                'total_records': len(catalog['mapping']),
+                'clave_column': catalog['clave_column'],
+                'desc_column': catalog['desc_column'],
+                'sample_keys': list(catalog['mapping'].keys())[:5]
+            }
+        return info
+
+    def is_loaded(self) -> bool:
+        """Verifica si los catálogos se cargaron correctamente"""
+        return self.loaded
 
     def get_available_catalogs(self) -> List[str]:
         """Retorna la lista de catálogos disponibles"""
         return list(self.catalogs.keys())
 
-    def is_loaded(self) -> bool:
-        """Verifica si los catálogos fueron cargados exitosamente"""
-        return self.loaded
-
-def get_manual_description(catalog_name: str, key: str) -> str:
-    """
-    Proporciona descripciones manuales para catálogos que no están en el archivo Excel
-    o cuando el catálogo no está disponible
-    """
-    key = str(key).strip()
-
-    # Catálogos manuales comunes
-    manual_catalogs = {
-        'TipoContrato': {
-            '01': 'Contrato de trabajo por tiempo indeterminado',
-            '02': 'Contrato de trabajo por tiempo determinado',
-            '03': 'Contrato de trabajo para obra determinada',
-            '04': 'Contrato de trabajo por tiempo indeterminado sujeto a prueba',
-            '05': 'Contrato de trabajo por tiempo determinado sujeto a prueba',
-            '06': 'Contrato de trabajo por temporada',
-            '07': 'Contrato de trabajo por módulo laboral',
-            '08': 'Contrato de trabajo por tiempo determinado discontinuo',
-            '09': 'Contrato de trabajo para capacitación inicial',
-            '10': 'Contrato de trabajo por tiempo indeterminado a prueba',
-            '99': 'Otro tipo de contrato'
-        },
-        'TipoJornada': {
-            '01': 'Diurna',
-            '02': 'Nocturna',
-            '03': 'Mixta',
-            '04': 'Por hora',
-            '05': 'Reducida',
-            '06': 'Continuada',
-            '07': 'Partida',
-            '08': 'Por turnos',
-            '09': 'Discontinua',
-            '99': 'Otra jornada'
-        },
-        'PeriodicidadPago': {
-            '01': 'Diario',
-            '02': 'Semanal',
-            '03': 'Catorcenal',
-            '04': 'Quincenal',
-            '05': 'Mensual',
-            '06': 'Bimestral',
-            '07': 'Trimestral',
-            '08': 'Semestral',
-            '09': 'Anual',
-            '10': 'Decenal',
-            '11': 'Paganini',
-            '99': 'Otra periodicidad'
-        },
-        'RiesgoPuesto': {
-            '1': 'Clase I (Gastos médicos)',
-            '2': 'Clase II (Gastos médicos y pensiones)',
-            '3': 'Clase III (Invalidez y vida)',
-            '4': 'Clase IV (Invalidez, vida y cesantía)',
-            '5': 'Clase V (Invalidez, vida, cesantía y vejez)',
-            '99': 'No aplica'
-        }
+# Catálogos manuales como respaldo
+CATALOGOS_MANUALES = {
+    'tipo_contrato': {
+        '01': 'Contrato por tiempo indeterminado',
+        '02': 'Contrato por tiempo determinado',
+        '03': 'Contrato para obra determinada',
+        '04': 'Contrato sujeto a prueba',
+        '05': 'Contrato con capacitación inicial'
+    },
+    'tipo_jornada': {
+        '01': 'Diurna',
+        '02': 'Mixta',
+        '03': 'Nocturna',
+        '04': 'Por hora',
+        '05': 'Reducida',
+        '06': 'Continuada',
+        '07': 'Partida',
+        '08': 'Discontinua'
+    },
+    'tipo_regimen': {
+        '02': 'Sueldos y salarios',
+        '04': 'Salarios mínimos',
+        '05': 'Jubilados',
+        '06': 'Pensionados',
+        '07': 'Asimilados a salarios',
+        '08': 'Servicios profesionales (honorarios)',
+        '09': 'Arrendamiento',
+        '10': 'Régimen de actividades empresariales y profesionales',
+        '12': 'Personas físicas con actividades empresariales y profesionales'
+    },
+    'periodicidad_pago': {
+        '01': 'Diario',
+        '02': 'Semanal',
+        '03': 'Catorcenal',
+        '04': 'Quincenal',
+        '05': 'Mensual',
+        '06': 'Bimestral',
+        '07': 'Unidad por obra',
+        '08': 'Comisión',
+        '09': 'Precio alzado',
+        '10': 'Consolidado mensual'
+    },
+    'riesgo_puesto': {
+        '1': 'Clase I',
+        '2': 'Clase II',
+        '3': 'Clase III',
+        '4': 'Clase IV',
+        '5': 'Clase V'
     }
+}
 
-    if catalog_name in manual_catalogs and key in manual_catalogs[catalog_name]:
-        return manual_catalogs[catalog_name][key]
+def get_manual_description(catalog_type: str, clave: str) -> str:
+    """
+    Obtiene descripción de catálogos manuales como respaldo
 
-    # Si no se encuentra, retornar clave con formato
-    return f"{key} (Sin descripción)"
+    Args:
+        catalog_type: Tipo de catálogo
+        clave: Clave a buscar
+
+    Returns:
+        Descripción correspondiente
+    """
+    try:
+        return CATALOGOS_MANUALES.get(catalog_type, {}).get(str(clave), str(clave))
+    except:
+        return str(clave)

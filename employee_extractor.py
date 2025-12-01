@@ -49,270 +49,247 @@ class EmployeeDatabaseExtractor:
                 logger.warning("No se encontró el complemento de nómina en el XML")
                 return None
 
-            # Extract employee data
-            employee_data = {}
+            # Extraer datos básicos del empleado
+            rfc_empleado = self._safe_find_text(root, './/cfdi:Receptor', 'Rfc')
+            tipo_contrato = self._safe_find_text(nomina, './/nomina12:Receptor', 'TipoContrato')
+            tipo_jornada = self._safe_find_text(nomina, './/nomina12:Receptor', 'TipoJornada')
+            tipo_regimen = self._safe_find_text(nomina, './/nomina12:Receptor', 'TipoRegimen')
+            riesgo_puesto = self._safe_find_text(nomina, './/nomina12:Receptor', 'RiesgoPuesto')
+            periodicidad_pago = self._safe_find_text(nomina, './/nomina12:Receptor', 'PeriodicidadPago')
 
-            # Basic employee information
-            receptor = root.find('.//cfdi:Receptor', self.namespaces)
-            if receptor is not None:
-                employee_data['rfc_empleado'] = receptor.get('Rfc', '')
-                employee_data['nombre_empleado'] = receptor.get('Nombre', '')
-                employee_data['uso_cfdi_empleado'] = receptor.get('UsoCFDI', '')
+            # Get descriptions first (prioritize descriptions over codes)
+            tipo_contrato_desc = get_manual_description('tipo_contrato', tipo_contrato)
+            tipo_jornada_desc = get_manual_description('tipo_jornada', tipo_jornada)
+            tipo_regimen_desc = get_manual_description('tipo_regimen', tipo_regimen)
+            riesgo_puesto_desc = get_manual_description('riesgo_puesto', riesgo_puesto)
+            periodicidad_pago_desc = get_manual_description('periodicidad_pago', periodicidad_pago)
 
-            # Extract from Nomina complement
-            employee_data.update(self._extract_nomina_data(nomina))
+            # Override with catalog descriptions if available
+            if self.catalog_manager.is_loaded():
+                tipo_contrato_desc = self.catalog_manager.decode_tipo_contrato(tipo_contrato) or tipo_contrato_desc
+                tipo_jornada_desc = self.catalog_manager.decode_tipo_jornada(tipo_jornada) or tipo_jornada_desc
+                tipo_regimen_desc = self.catalog_manager.decode_tipo_regimen(tipo_regimen) or tipo_regimen_desc
+                riesgo_puesto_desc = self.catalog_manager.decode_riesgo_puesto(riesgo_puesto) or riesgo_puesto_desc
+                periodicidad_pago_desc = self.catalog_manager.decode_periodicidad_pago(periodicidad_pago) or periodicidad_pago_desc
 
-            # Add processing metadata
-            timbre = root.find('.//tfd:TimbreFiscalDigital', self.namespaces)
-            if timbre is not None:
-                employee_data['fecha_timbrado'] = timbre.get('FechaTimbrado', '')
-                employee_data['uuid'] = timbre.get('UUID', '')
+            # Extract employee data (versión optimizada - solo campos esenciales)
+            employee_data = {
+                # Datos básicos del empleado
+                'rfc_empleado': rfc_empleado,
+                'nombre_empleado': self._safe_find_text(root, './/cfdi:Receptor', 'Nombre'),
+                'curp': self._safe_find_text(nomina, './/nomina12:Receptor', 'Curp'),
+                'num_seguridad_social': self._safe_find_text(nomina, './/nomina12:Receptor', 'NumSeguridadSocial'),
+                'num_empleado': self._safe_find_text(nomina, './/nomina12:Receptor', 'NumEmpleado'),
 
-            # Add XML file info
-            comprobante = root
-            if comprobante is not None:
-                employee_data['fecha_pago'] = comprobante.get('Fecha', '')
-                employee_data['folio'] = comprobante.get('Folio', '')
+                # Domicilio fiscal del empleado
+                'codigo_postal': self._safe_find_text(root, './/cfdi:Receptor', 'DomicilioFiscalReceptor'),
+
+                # Datos laborales (solo descripciones, sin códigos de referencia)
+                'fecha_inicio_rel_laboral': self._safe_find_text(nomina, './/nomina12:Receptor', 'FechaInicioRelLaboral'),
+                'antigüedad': self._safe_find_text(nomina, './/nomina12:Receptor', 'Antigüedad'),
+                'tipo_contrato': tipo_contrato_desc,  # Solo descripción
+                'tipo_jornada': tipo_jornada_desc,    # Solo descripción
+                'tipo_regimen': tipo_regimen_desc,    # Solo descripción
+                'riesgo_puesto': riesgo_puesto_desc,  # Solo descripción
+                'periodicidad_pago': periodicidad_pago_desc,  # Solo descripción
+                'salario_diario_integrado': self._safe_find_text(nomina, './/nomina12:Receptor', 'SalarioDiarioIntegrado'),
+                'salario_base_cot_apo': self._safe_find_text(nomina, './/nomina12:Receptor', 'SalarioBaseCotApor'),
+                'clave_ent_fed': self._safe_find_text(nomina, './/nomina12:Receptor', 'ClaveEntFed'),
+
+                # Datos adicionales del puesto
+                'departamento': self._safe_find_text(nomina, './/nomina12:Receptor', 'Departamento'),
+                'puesto': self._safe_find_text(nomina, './/nomina12:Receptor', 'Puesto'),
+                'sindicalizado': self._safe_find_text(nomina, './/nomina12:Receptor', 'Sindicalizado'),
+
+                # Datos del empleador
+                'rfc_empleador': self._safe_find_text(root, './/cfdi:Emisor', 'Rfc'),
+                'nombre_empleador': self._safe_find_text(root, './/cfdi:Emisor', 'Nombre'),
+                'registro_patronal': self._safe_find_text(nomina, './/nomina12:Emisor', 'RegistroPatronal'),
+                'regimen_fiscal_empleador': self._safe_find_text(root, './/cfdi:Emisor', 'RegimenFiscal'),
+
+                # Timestamp de procesamiento
+                'fecha_procesamiento': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+
+            # Validate required fields
+            if not employee_data.get('rfc_empleado') or not employee_data.get('nombre_empleado'):
+                logger.warning("Faltan campos requeridos (RFC o nombre del empleado)")
+                return None
 
             return employee_data
 
         except ET.ParseError as e:
-            logger.error(f"Error parseando XML: {e}")
+            logger.error(f"Error al parsear XML: {e}")
             return None
         except Exception as e:
-            logger.error(f"Error extrayendo datos del XML: {e}")
+            logger.error(f"Error inesperado al extraer datos del empleado: {e}")
             return None
 
     def _find_nomina_element(self, root: ET.Element) -> Optional[ET.Element]:
-        """Find the Nomina complement in different versions"""
-        # Try Nomina1.2
-        nomina = root.find('.//nomina12:Nomina', self.namespaces)
-        if nomina is not None:
-            return nomina
+        """Find the nomina complement element in XML."""
+        # Try different paths for nomina complement
+        nomina_paths = [
+            './/nomina12:Nomina',
+            './/cfdi:Complemento//nomina12:Nomina',
+            './/cfdi:Complemento/nomina12:Nomina'
+        ]
 
-        # Try other versions if needed
+        for path in nomina_paths:
+            try:
+                element = root.find(path, self.namespaces)
+                if element is not None:
+                    return element
+            except:
+                continue
+
         return None
 
-    def _extract_nomina_data(self, nomina: ET.Element) -> Dict[str, Any]:
-        """Extract specific data from Nomina complement"""
-        data = {}
+    def _safe_find_text(self, parent: ET.Element, tag: str, attribute: str) -> Optional[str]:
+        """Safely extract text from XML element attribute."""
+        try:
+            element = parent.find(tag, self.namespaces)
+            if element is not None:
+                return element.get(attribute, '').strip()
+        except:
+            pass
+        return None
 
-        # Basic nomina data
-        data['version_nomina'] = nomina.get('Version', '')
-        data['tipo_nomina'] = nomina.get('TipoNomina', '')
-        data['fecha_pago_nomina'] = nomina.get('FechaPago', '')
-        data['fecha_inicial_pago'] = nomina.get('FechaInicialPago', '')
-        data['fecha_final_pago'] = nomina.get('FechaFinalPago', '')
-        data['num_dias_pagados'] = nomina.get('NumDiasPagados', '')
-        data['total_percepciones'] = nomina.get('TotalPercepciones', '')
-        data['total_deducciones'] = nomina.get('TotalDeducciones', '')
-        data['total_otras_deducciones'] = nomina.get('TotalOtrasDeducciones', '')
+    def _extract_percepciones_details(self, nomina: ET.Element) -> str:
+        """Extract details of perception types from XML"""
+        try:
+            percepciones = []
+            perceptions_elements = nomina.findall('.//nomina12:Percepcion', self.namespaces)
 
-        # Empleado data
-        empleado = nomina.find('.//nomina12:Empleado', self.namespaces)
-        if empleado is not None:
-            data.update(self._extract_empleado_data(empleado))
+            for percep in perceptions_elements:
+                concepto = percep.get('Concepto', '').strip()
+                tipo = percep.get('TipoPercepcion', '').strip()
+                clave = percep.get('Clave', '').strip()
 
-        return data
+                # Decode tipo if catalog available
+                if self.catalog_manager.is_loaded():
+                    tipo_desc = self.catalog_manager.decode_tipo_percepcion(tipo)
+                else:
+                    tipo_desc = tipo
 
-    def _extract_empleado_data(self, empleado: ET.Element) -> Dict[str, Any]:
-        """Extract employee specific data"""
-        data = {}
+                percepciones.append(f"{concepto} ({clave})")
 
-        data['curp'] = empleado.get('Curp', '')
-        data['num_seguridad_social'] = empleado.get('NumSeguridadSocial', '')
-        data['fecha_inicio_rel_laboral'] = empleado.get('FechaInicioRelLaboral', '')
-        data['antiguedad'] = empleado.get('Antiguedad', '')
-        data['tipo_contrato'] = empleado.get('TipoContrato', '')
-        data['sindicalizado'] = empleado.get('Sindicalizado', '')
-        data['tipo_jornada'] = empleado.get('TipoJornada', '')
-        data['tipo_regimen'] = empleado.get('TipoRegimen', '')
-        data['num_empleado'] = empleado.get('NumEmpleado', '')
-        data['departamento'] = empleado.get('Departamento', '')
-        data['puesto'] = empleado.get('Puesto', '')
-        data['riesgo_puesto'] = empleado.get('RiesgoPuesto', '')
-        data['periodicidad_pago'] = empleado.get('PeriodicidadPago', '')
-        data['banco'] = empleado.get('Banco', '')
-        data['cuenta_bancaria'] = empleado.get('CuentaBancaria', '')
-        data['salario_base_cot_apor'] = empleado.get('SalarioBaseCotApor', '')
-        data['salario_diario_integrado'] = empleado.get('SalarioDiarioIntegrado', '')
-        data['clave_ent_fed'] = empleado.get('ClaveEntFed', '')
+            return '; '.join(percepciones) if percepciones else ''
+        except:
+            return ''
 
-        # Decode coded fields using catalogs
-        data['tipo_contrato_desc'] = self.catalog_manager.get_description('TipoContrato', data['tipo_contrato'])
-        data['tipo_jornada_desc'] = self.catalog_manager.get_description('TipoJornada', data['tipo_jornada'])
-        data['periodicidad_pago_desc'] = self.catalog_manager.get_description('PeriodicidadPago', data['periodicidad_pago'])
-        data['riesgo_puesto_desc'] = self.catalog_manager.get_description('RiesgoPuesto', data['riesgo_puesto'])
+    def find_xml_files(self, path: str) -> List[str]:
+        """
+        Find XML files in a given path (directory or URL)
 
-        return data
+        Args:
+            path: Directory path to search for XML and ZIP files
+
+        Returns:
+            List of file paths found
+        """
+        files_found = []
+        try:
+            path_obj = Path(path)
+
+            if path_obj.is_dir():
+                # Search for XML and ZIP files
+                xml_files = list(path_obj.glob("**/*.xml"))
+                zip_files = list(path_obj.glob("**/*.zip"))
+
+                files_found = [str(f) for f in xml_files + zip_files]
+                logger.info(f"Encontrados {len(xml_files)} XMLs y {len(zip_files)} ZIPs en {path}")
+
+            elif path_obj.is_file() and (path_obj.suffix.lower() in ['.xml', '.zip']):
+                files_found = [str(path_obj)]
+                logger.info(f"Archivo encontrado: {path}")
+
+            else:
+                logger.warning(f"Ruta no válida o no se encontraron archivos: {path}")
+
+        except Exception as e:
+            logger.error(f"Error buscando archivos en {path}: {e}")
+
+        return files_found
 
     def process_xml_files(self, xml_files: List[str]) -> pd.DataFrame:
         """
-        Process a list of XML files and extract employee data.
+        Process multiple XML files and create employee database.
 
         Args:
             xml_files: List of XML file paths
 
         Returns:
-            DataFrame with employee data
+            DataFrame with unique employees
         """
-        all_employees = []
+        employees_data = []
+        processed_count = 0
+        error_count = 0
 
-        for xml_file in xml_files:
+        logger.info(f"Procesando {len(xml_files)} archivos XML...")
+
+        for file_path in xml_files:
             try:
-                logger.info(f"Procesando archivo: {xml_file}")
-
-                with open(xml_file, 'r', encoding='utf-8') as f:
+                with open(file_path, 'r', encoding='utf-8') as f:
                     xml_content = f.read()
 
                 employee_data = self.extract_employee_data_from_xml(xml_content)
                 if employee_data:
-                    # Add file metadata
-                    employee_data['archivo_origen'] = os.path.basename(xml_file)
-                    employee_data['ruta_archivo'] = xml_file
-                    employee_data['fecha_procesamiento'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
-                    all_employees.append(employee_data)
+                    employees_data.append(employee_data)
+                    processed_count += 1
+                    logger.info(f"✅ Procesado: {file_path}")
+                else:
+                    error_count += 1
+                    logger.warning(f"⚠️ No se pudo extraer datos del empleado: {file_path}")
 
             except Exception as e:
-                logger.error(f"Error procesando archivo {xml_file}: {e}")
-                continue
+                error_count += 1
+                logger.error(f"❌ Error procesando {file_path}: {e}")
 
-        if not all_employees:
-            logger.warning("No se extrajo información de empleados de ningún archivo")
+        if not employees_data:
+            logger.warning("No se pudo extraer datos de empleados de ningún archivo")
             return pd.DataFrame()
 
-        # Create DataFrame
-        df = pd.DataFrame(all_employees)
+        # Create DataFrame and remove duplicates
+        df = pd.DataFrame(employees_data)
 
-        # Remove duplicates
-        df = self._remove_duplicates(df)
+        # Remove duplicates based on RFC del empleado (primary key)
+        unique_employees = self._remove_duplicates(df)
 
-        self.employees_df = df
-        logger.info(f"Se procesaron {len(xml_files)} archivos y se encontraron {len(df)} empleados únicos")
+        logger.info(f"✅ Procesamiento completado:")
+        logger.info(f"   - Archivos procesados: {processed_count}")
+        logger.info(f"   - Errores: {error_count}")
+        logger.info(f"   - Empleados únicos encontrados: {len(unique_employees)}")
 
-        return df
+        return unique_employees
 
     def _remove_duplicates(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Remove duplicate employees, keeping the most recent record.
-
-        Args:
-            df: DataFrame with employee data
-
-        Returns:
-            DataFrame with duplicates removed
+        Remove duplicate employees based on RFC.
+        Keeps the most recent information based on processing date or fecha_inicio_rel_laboral.
         """
         if df.empty:
             return df
 
-        # Sort by date fields to get most recent records first
-        df_sorted = df.copy()
-
-        # Try different date columns for sorting
-        date_columns = ['fecha_pago', 'fecha_pago_nomina', 'fecha_procesamiento']
-        sort_column = None
-
+        # Convert date columns for proper sorting
+        date_columns = ['fecha_inicio_rel_laboral', 'fecha_procesamiento']
         for col in date_columns:
-            if col in df_sorted.columns:
-                try:
-                    df_sorted[col] = pd.to_datetime(df_sorted[col], errors='coerce')
-                    df_sorted = df_sorted.sort_values(col, ascending=False, na_position='last')
-                    sort_column = col
-                    break
-                except:
-                    continue
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], errors='coerce')
 
-        if sort_column:
-            logger.info(f"Ordenando por fecha: {sort_column}")
+        # Sort by processing date (most recent first) to keep latest data
+        # If no processing date, sort by inicio_rel_laboral
+        if 'fecha_procesamiento' in df.columns:
+            df_sorted = df.sort_values('fecha_procesamiento', ascending=False, na_position='last')
+        elif 'fecha_inicio_rel_laboral' in df.columns:
+            df_sorted = df.sort_values('fecha_inicio_rel_laboral', ascending=False, na_position='last')
+        else:
+            # Keep original order if no date columns available
+            df_sorted = df
 
-        # Remove duplicates based on RFC (primary key for employees)
-        if 'rfc_empleado' in df_sorted.columns:
-            initial_count = len(df_sorted)
-            df_unique = df_sorted.drop_duplicates(subset=['rfc_empleado'], keep='first')
-            removed_count = initial_count - len(df_unique)
-            logger.info(f"Se eliminaron {removed_count} registros duplicados")
-            return df_unique
+        # Remove duplicates based on rfc_empleado, keeping first (most recent)
+        unique_df = df_sorted.drop_duplicates(subset=['rfc_empleado'], keep='first')
 
-        logger.warning("No se encontró RFC para eliminar duplicados")
-        return df_sorted
+        # Reset index
+        unique_df = unique_df.reset_index(drop=True)
 
-    def add_descriptions(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Add descriptions to coded fields using catalogs.
-
-        Args:
-            df: DataFrame with employee data
-
-        Returns:
-            DataFrame with descriptions added
-        """
-        if df.empty:
-            return df
-
-        df_desc = df.copy()
-
-        # Add descriptions for coded fields
-        coded_fields = [
-            ('tipo_contrato', 'tipo_contrato_desc'),
-            ('tipo_jornada', 'tipo_jornada_desc'),
-            ('periodicidad_pago', 'periodicidad_pago_desc'),
-            ('riesgo_puesto', 'riesgo_puesto_desc')
-        ]
-
-        for code_field, desc_field in coded_fields:
-            if code_field in df_desc.columns and desc_field not in df_desc.columns:
-                df_desc[desc_field] = df_desc[code_field].apply(
-                    lambda x: self.catalog_manager.get_description(
-                        code_field.replace('_', '').replace('tipo', '').replace('pago', ''),
-                        str(x)
-                    )
-                )
-
-        return df_desc
-
-    def find_xml_files(self, directory: str) -> List[str]:
-        """
-        Find all XML files in a directory.
-
-        Args:
-            directory: Directory path to search
-
-        Returns:
-            List of XML file paths
-        """
-        if not os.path.exists(directory):
-            logger.error(f"Directorio no existe: {directory}")
-            return []
-
-        xml_files = []
-
-        # Find XML files
-        for ext in ['*.xml', '*.XML']:
-            xml_files.extend(glob.glob(os.path.join(directory, ext)))
-
-        # Find ZIP files and extract XMLs (if needed)
-        # This could be extended to handle ZIP files
-
-        logger.info(f"Se encontraron {len(xml_files)} archivos XML en {directory}")
-        return xml_files
-
-    def get_statistics(self) -> Dict[str, Any]:
-        """
-        Get statistics about the processed data.
-
-        Returns:
-            Dictionary with statistics
-        """
-        if self.employees_df is None or self.employees_df.empty:
-            return {}
-
-        stats = {
-            'total_empleados': len(self.employees_df),
-            'rfc_unicos': self.employees_df['rfc_empleado'].nunique() if 'rfc_empleado' in self.employees_df.columns else 0,
-            'curp_validas': self.employees_df['curp'].notna().sum() if 'curp' in self.employees_df.columns else 0,
-            'con_nss': self.employees_df['num_seguridad_social'].notna().sum() if 'num_seguridad_social' in self.employees_df.columns else 0,
-            'empleadores_unicos': self.employees_df['rfc_empleador'].nunique() if 'rfc_empleador' in self.employees_df.columns else 0,
-        }
-
-        return stats
+        return unique_df
